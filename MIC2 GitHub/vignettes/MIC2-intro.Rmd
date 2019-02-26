@@ -1,0 +1,172 @@
+---
+title: "A Quick Introduction to MIC2"
+author: "Qian Li"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+`MIC2`^[The first version of `MIC` is implemented in basic R, whereas the current version used `Rcpp` that yields a 40$+$ times efficiency boost.] 
+is a R package performing Multilevel Integrative Clustering, which allows for integrating information
+from multiple heterogeneous sources to make group level inference. It was originally developed to cluster (partition)
+brain regions using electroencephalogram(EEG) signals, especially its spectral features, but can be easily generalized
+under various scientific contexts. This introduction will demonstrate the full functionality of `MIC2` package, using
+examples of simple gaussian mixtures and simulated EEG signals to illustrate the workflow to implement `MIC` accordingly.
+For more of its details, our manuscipt is available [here](https://arxiv.org/abs/1609.09532)
+
+## Installation
+```{r, echo = TRUE, eval=FALSE}
+devtools::install_github("Qian-Li/MIC2")     ## to install
+library(MIC2)                                 ## loading
+```
+## Gaussian Mixtures
+```{r, echo = F, eval = T}
+# 3*3 Gaussian mixture simulation
+  set.seed(12345)
+  library(MIC2)
+  data1 <- array(dim = c(2,30,3))
+  for(ep in 1:3){
+    data1[,,ep] <- t(rbind(MASS::mvrnorm(10, mu = c(0,10), Sigma = 3*diag(2)),
+                           MASS::mvrnorm(10, mu = c(10,0), Sigma = 5*diag(2)),
+                           MASS::mvrnorm(10, mu = c(5,5), Sigma =  3*diag(2))))
+  }
+  data1[,,2] <- data1[,c(11:30,1:10),2]
+  data1[,,3] <- data1[,c(3:30,1,2),3]
+
+  data2 <- array(dim = c(2,30,3))
+  for(ep in 1:3){
+    data2[,,ep] <- t(rbind(MASS::mvrnorm(10, mu = c(0,5), Sigma = 3*diag(2)),
+                           MASS::mvrnorm(10, mu = c(5,0), Sigma = 2*diag(2)),
+                           MASS::mvrnorm(10, mu = c(5,5), Sigma = 3*diag(2))))
+  }
+  data2[,,2] <- data2[,c(11:30,1:10),2]
+  data2[,,3] <- data2[,c(3:30,1,2),3]
+
+  data3 <- array(dim = c(2,30,3))
+
+  for(ep in 1:3){
+    data3[,,ep] <- t(rbind(MASS::mvrnorm(10, mu = c(0,.20), Sigma = .10*diag(2)),
+                           MASS::mvrnorm(10, mu = c(.20,0), Sigma = .10*diag(2)),
+                           MASS::mvrnorm(10, mu = c(.20,.20), Sigma = .10*diag(2))))
+  }
+  data3[,,2] <- data3[,c(11:30,1:10),2]
+  data3[,,3] <- data3[,c(6:30,1:5),3]
+  list_dat = list(data1,data2,data3)
+```
+
+In this example, we simulate a group of 3 subjects, each with 3 repeated measurements collected on 30 items, 10 per group,
+that were simulated from a 2-D gaussian mixture distribution. The correct partition on 30 items is unclear at a particular
+measurement, however, the idea is to integrate information across repetitions by the proximity between 30 items, 
+and across individuals for an optimal group level partition. As shown below, the simulated data for 3 subjects (in rows) on 3 repeated
+measurements (in columns) is colored by their true group labels.
+
+```{r, echo = F, eval = T, fig.height= 6, fig.width= 6}
+par(mfrow = c(3,3), oma = c(0,0,0,0))
+for(sub in 1:3){
+  for(ep in 1:3){
+    par(mar = c(1,1,0,0))
+    plot(t(list_dat[[sub]][,,ep]), pch = 19, col = rep(1:3,rep(10,3)), xlab = "", ylab = "")
+  }
+}
+```
+
+To figure out the optimal label at all levels, i.e. group individual and repetitions, `MIC` admits data as a list of 3-D arrays,
+whose components are repeated measurements stacked in the 3rd dimension and items in the 2nd dimension, for each individual.
+Please refer to `help(MIC_prep)` and `help(MIC)` for data preparation.
+
+```{r, echo = T, eval = T}
+## -- Model fitting for 3 clusters, 10000 MCMC samples
+MIC(list_dat, K = 3, nit = 10000) -> out
+```
+```{r}
+## -- Optimal group labels:
+out$clustS
+## -- individual coherence to the group
+out$alpha
+```
+
+```{r, echo = F, eval = T, fig.height= 6, fig.width= 6}
+par(mfrow = c(3,3), oma = c(0,0,0,0))
+for(sub in 1:3){
+  for(ep in 1:3){
+    par(mar = c(1,1,0,0))
+    plot(t(list_dat[[sub]][,,ep]), pch = out$clustL[[sub]][ep,]+14, 
+        col = out$clustC[sub,], xlab = "", ylab = "", cex = 1.3)
+  }
+}
+```
+
+By scattering the original data, points are colored according to the `MIC` optimal individual level labels, but their shapes
+are determined by the optimal repetition level labels. The coherence parameter indicates the proximity between
+individual labels and group estimates, meanwhile, reflecting its contribution to the group inference. Since 
+subject (in row) 1 and 2 has more separable patterns that are highly coherent with the group level, 
+the corresponding $\alpha$ estimates are much higher than that of subject3.
+
+## EEG simulation and workflow
+Details regarding the signal generation are expatiated in our manuscript and its supplementary document. Here, we
+only demonstrate the workflow of dealing with EEG signals, using simulated data. 
+
+### Simulated signals
+```{r, echo=T, eval=T}
+set.seed(123)
+## -- 20 segments of signals sampled at 200Hz frequency, for 5 highly coherent individuals
+sim <- MIC_sim(alpha = 0.9,  nsub = 5, fs = 200, segs = 20)
+```
+
+### Optimal Model: number of clusters
+```{r, echo = T, eval = F}
+## -- optimal model search, with a smoothing setting of window = 4, overlap of 2.(takes approx 3mins)
+out <- dk_search(sim$Data, max_d = 10, n.iter = 5000, par.win = c(4, 2))
+## ## -- search log -- ##
+## D = 2: best_K = 3 COH = 0.8568124
+## ----------------------------------------- 
+## D = 3: best_K = 4 COH = 0.8476597
+## ----------------------------------------- 
+## D = 4: best_K = 4 COH = 0.8485574
+## ----------------------------------------- 
+```
+Our searchign algorithm suggested the optimal model to investigate is 4 cluster mixture, the same as the simulation truth, 
+and it converged at the $d = 4$. We would proceed with these settings, including the smoothing and spectral estimate parameters.
+
+### Model fitting:
+```{r, echo = T, eval = T}
+## -- Spectral Estimation and Eigen-Laplacian transformation
+list_data <- lapply(sim$Data, function(x) MIC_prep(X = x, d = 4,
+                                  par.spec = c(80, 50, 100), par.win = c(3, 1)))
+## -- Model fitting (takes approx 17secs)
+output <- MIC(data = list_data, K = 4, nit = 5000)
+```
+
+#### Results assessment:
+```{r, echo = T, eval = T}
+## -- Realign estimated labels against truth
+est_S = align(refL = sim$C, L = output$clustS)
+n     = length(sim$Data)
+est_C = lapply(1:n, function(i) output$clustC[i,] = align(refL = est_S, L = output$clustC[i,]))
+tru_C = lapply(1:n, function(i) sim$Ci[,i])
+```
+
+```{r, echo = T, eval = T}
+## -- Group label accuracy:
+sum(est_S == sim$C) / length(est_S)
+## -- Individual labels accuracy:
+mapply(function(x,y) sum(align(refL = x, L = y) == x)/length(est_S), tru_C, est_C)
+```
+
+### More functionalities:
+
+Here we briefly examplify the usage of `EEGplot`, which plots out the the 1st-124th electrode of 
+128 channel HydroCel Geodesic Sensor Net on its [map](ftp://ftp.egi.com/pub/support/Documents/net_layouts/hcgsn_128.pdf).
+The 125th-129th electrodes were excluded in this plot, and the label estimates are faked (1-32, 33-80, 81-124).
+
+```{r, echo=F, eval = T}
+## -- a fake label estimate
+label <- rep(c(1,2,3), c(32, 48, 44)); colors = c("#4477AA", "#DDCC77", "#CC6677")
+```
+
+```{r, echo=T, eval=T, fig.width=5, fig.height=5}
+par(oma = rep(0,4), mar = rep(0.5,4)); EEGplot(clust = label, color = colors)
+```
