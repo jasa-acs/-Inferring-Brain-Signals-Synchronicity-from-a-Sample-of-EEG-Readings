@@ -1,4 +1,4 @@
-# Downstream-Effects-of-Upstream-Causes
+# Inferring-Brain-Signals-Synchronicity-from-a-Sample-of-EEG-Readings
 
 # Author Contributions Checklist Form
 
